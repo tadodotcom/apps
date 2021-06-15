@@ -1,0 +1,72 @@
+name: CD
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-shopify-app:
+    name: Build shopify app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./apps/shopify
+    strategy:
+      matrix:
+        node: [12.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Node
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Cache NPM dependencies
+        uses: actions/cache@v1
+        id: npm-cache
+        with:
+          path: node_modules
+          key: ${{ runner.OS }}-npm-cache-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.OS }}-npm-cache-
+      - name: Install dependencies
+        run: npm ci
+        if: steps.npm-cache.outputs.cache-hit != 'true'
+      - name: Build
+        run: npm run build
+      - name: Archive artifacts
+        uses: actions/upload-artifact@v1
+        with:
+          name: shopify-app-artifact
+          path: ./apps/shopify/build
+  deploy-shopify-app:
+    name: Deploy contentful shopify app to S3
+    needs: [build-shopify-app]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./apps/shopify
+    strategy:
+      matrix:
+        node: [12.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Node
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
+      - name: Download artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: shopify-app-artifact
+          path: ./apps/shopify/build
+      - name: Deploy
+        run: |
+          aws s3 sync ./build/ s3://loki-contentful-apps/shopify --acl public-read --cache-control 'public, max-age=2592000'
